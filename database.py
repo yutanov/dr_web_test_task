@@ -7,9 +7,13 @@ class Database:
     def __init__(self):
         self.data: Dict[str, str] = {}
         self._counts: Dict[str, int] = {}
+        self.transactions: List[Dict[str, Optional[str]]] = []
 
     def set(self, name: str, value: str) -> None:
         old_value = self.data.get(name)
+
+        if self.transactions:
+            self.transactions[-1][name] = old_value
 
         if old_value is not None:
             self._decrement_count(old_value)
@@ -24,6 +28,9 @@ class Database:
         if name in self.data:
             value = self.data[name]
 
+            if self.transactions:
+                self.transactions[-1][name] = value
+
             self._decrement_count(value)
             del self.data[name]
 
@@ -33,6 +40,41 @@ class Database:
     def find(self, value: str) -> List[str]:
         return sorted(name for name, val in self.data.items() if val == value)
 
+    def begin(self) -> None:
+        self.transactions.append({})
+
+    def rollback(self) -> Optional[str]:
+        if not self.transactions:
+            return None
+
+        current_txn = self.transactions[-1]
+        for name, old_value in current_txn.items():
+            if old_value is None:
+                if name in self.data:
+                    self._decrement_count(self.data[name])
+                    del self.data[name]
+            else:
+                if name in self.data:
+                    self._decrement_count(self.data[name])
+                self.data[name] = old_value
+                self._increment_count(old_value)
+
+        self.transactions.pop()
+        return None
+
+    def commit(self) -> Optional[str]:
+        if not self.transactions:
+            return None
+
+        if len(self.transactions) > 1:
+            parent_txn = self.transactions[-2]
+            for name, value in self.transactions[-1].items():
+                if name not in parent_txn:
+                    parent_txn[name] = value
+
+        self.transactions.pop()
+        return None
+
     def _increment_count(self, value: str) -> None:
         self._counts[value] = self._counts.get(value, 0) + 1
 
@@ -40,6 +82,19 @@ class Database:
         self._counts[value] -= 1
         if self._counts[value] == 0:
             del self._counts[value]
+
+    def _remove_if_exists(self, name: str) -> None:
+        if name in self.data:
+            value = self.data[name]
+            self._decrement_count(value)
+            del self.data[name]
+
+    def _restore_value(self, name: str, value: str) -> None:
+        current_value = self.data.get(name)
+        if current_value is not None:
+            self._decrement_count(current_value)
+        self.data[name] = value
+        self._increment_count(value)
 
 
 class Command(ABC):
@@ -82,6 +137,28 @@ class CountsCommand(Command):
         return str(db.get_counts(args[0]))
 
 
+class BeginCommand(Command):
+    def execute(self, db: Database, args: List[str]) -> Optional[str]:
+        if not self.validate_args(args, 0):
+            return "BEGIN takes no arguments"
+        db.begin()
+        return None
+
+
+class RollbackCommand(Command):
+    def execute(self, db: Database, args: List[str]) -> Optional[str]:
+        if not self.validate_args(args, 0):
+            return "ROLLBACK takes no arguments"
+        return db.rollback()
+
+
+class CommitCommand(Command):
+    def execute(self, db: Database, args: List[str]) -> Optional[str]:
+        if not self.validate_args(args, 0):
+            return "COMMIT takes no arguments"
+        return db.commit()
+
+
 class FindCommand(Command):
     def execute(self, db: Database, args: List[str]) -> Optional[str]:
         if not self.validate_args(args, 1):
@@ -106,6 +183,9 @@ class CommandProcessor:
             "UNSET": UnsetCommand,
             "COUNTS": CountsCommand,
             "FIND": FindCommand,
+            "BEGIN": BeginCommand,
+            "ROLLBACK": RollbackCommand,
+            "COMMIT": CommitCommand,
             "END": EndCommand,
         }
 

@@ -43,6 +43,50 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(self.db.find("20"), ["B"])
         self.assertEqual(self.db.find("30"), [])
 
+    def test_transactions_commit(self):
+        self.db.begin()
+        self.db.set("A", "10")
+        self.db.commit()
+        self.assertEqual(self.db.get("A"), "10")
+        self.assertIsNone(self.db.rollback())
+
+    def test_transactions_rollback(self):
+        self.db.begin()
+        self.db.set("A", "10")
+        self.db.rollback()
+        self.assertEqual(self.db.get("A"), "NULL")
+
+    def test_nested_transactions(self):
+        # level 1
+        self.db.begin()
+        self.db.set("A", "10")
+
+        # level 2
+        self.db.begin()
+        self.db.set("B", "20")
+
+        # level 3
+        self.db.begin()
+        self.db.set("A", "30")
+
+        self.assertEqual(self.db.get("A"), "30")
+        self.assertEqual(self.db.get("B"), "20")
+
+        # rollback level 3
+        self.db.rollback()
+        self.assertEqual(self.db.get("A"), "10")
+        self.assertEqual(self.db.get("B"), "20")
+
+        # commit level 2
+        self.db.commit()
+        self.assertEqual(self.db.get("A"), "10")
+        self.assertEqual(self.db.get("B"), "20")
+
+        # rollback level 1
+        self.db.rollback()
+        self.assertEqual(self.db.get("A"), "NULL")
+        self.assertEqual(self.db.get("B"), "NULL")
+
 
 class TestCommands(unittest.TestCase):
     def setUp(self):
@@ -100,9 +144,10 @@ class TestCommandProcessor(unittest.TestCase):
         self.assertEqual(self.processor.process("UNKNOWN"), "Unknown command")
 
     def test_transaction_commands(self):
+        self.assertEqual(self.processor.process("BEGIN"), None)
         self.assertEqual(self.processor.process("SET A 10"), None)
         self.assertEqual(self.processor.process("GET A"), "10")
-        self.assertEqual(self.processor.process("UNSET A"), None)
+        self.assertEqual(self.processor.process("ROLLBACK"), None)
         self.assertEqual(self.processor.process("GET A"), "NULL")
 
 
